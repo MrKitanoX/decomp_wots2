@@ -1,3 +1,9 @@
+> 🇧🇷 **Versão em português (PT-BR)** — este fork traz a **tradução completa para o português do Brasil**,
+> um **menu de configurações de jogo de PC** (F1/Esc), **mouse e teclado nativos** e um **instalador** que usa a sua própria ISO.
+> **[⬇ Baixar a versão PT-BR](https://github.com/MrKitanoX/decomp_wots2/releases/latest)** · **[Leia-me em português](LEIA-ME-PTBR.md)**
+>
+> *Fork of [acklavidian/decomp_wots2](https://github.com/acklavidian/decomp_wots2) — the original project's README follows below.*
+
 <div align="center">
 
 # 侍道2 — Way of the Samurai 2, native
