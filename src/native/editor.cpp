@@ -23,6 +23,7 @@
 
 #include "native/editor.h"
 #include "native/editor_hooks.h"
+#include "native/settings_menu.h"
 #include "native/archive.h"
 #include "native/guest.h"
 #include "native/mods.h"
@@ -79,7 +80,10 @@ std::deque<Snapshot> sUndo;
 
 enum Mode { kObjects, kCells, kPoints };
 
-bool sReady = false;        // ImGui set up
+bool sReady = false;
+ImFont* sMenuTitle = nullptr;      // the settings menu's titles (Cambria Bold)
+ImFont* sMenuKanji = nullptr;      // its kanji (Yu Gothic Bold, only the glyphs it shows)
+ImFont* sMenuFont = nullptr;        // the PC settings menu's (with accents)        // ImGui set up
 bool sOpen = false;
 bool sLightOpen = false;    // the lighting panel (F5)
 // Photo mode (F7): the game held still, the HUD away, a free camera.
@@ -1526,14 +1530,15 @@ void close_photo() {
     hal::pad::set_blocked(false);
     hal::gs::set_frozen(false);
     apply_dof();
-    if (!sLightOpen)
+    if (!sLightOpen && !settings_menu::is_open())
         hal::gs::set_overlay(nullptr);
     printf("[photo] off\n");
 }
 
 void overlay() {
     const bool toast = !sToast.empty() && SDL_GetTicks() < sToastUntil;
-    if (!sOpen && !sLightOpen && !sPhoto && !toast) {
+    const bool menu = settings_menu::is_open();
+    if (!sOpen && !sLightOpen && !sPhoto && !toast && !menu) {
         if (!sToast.empty()) {
             sToast.clear();
             hal::gs::set_overlay(nullptr);
@@ -1561,9 +1566,11 @@ void overlay() {
     }
     if (sLightOpen)
         lighting_panel();
+    if (menu)
+        settings_menu::draw();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    if (!sLightOpen && !sOpen && !sPhoto && !toast)    // (closed with its window's ×)
+    if (!sLightOpen && !sOpen && !sPhoto && !toast && !settings_menu::is_open())    // (closed with its window's ×)
         close_lighting();
 }
 
@@ -1573,6 +1580,44 @@ void ensure_imgui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.Fonts->AddFontDefault();
+        auto exists = [](const char* path) {
+            FILE* f = fopen(path, "rb");
+            if (f) fclose(f);
+            return f != nullptr;
+        };
+        // Latin-1 and the general punctuation (dashes, bullets, ellipsis).
+        static const ImWchar kText[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0};
+        for (const char* path : {"C:/Windows/Fonts/seguisb.ttf", "C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"})
+            if (exists(path)) {
+                ImFontConfig cfg;
+                cfg.OversampleH = 2;
+                sMenuFont = io.Fonts->AddFontFromFileTTF(path, 44.0f, &cfg, kText);
+                break;
+            }
+        for (const char* path : {"C:/Windows/Fonts/cambriab.ttf", "C:/Windows/Fonts/constanb.ttf", "C:/Windows/Fonts/georgiab.ttf",
+                                 "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"})
+            if (exists(path)) {
+                ImFontConfig cfg;
+                sMenuTitle = io.Fonts->AddFontFromFileTTF(path, 64.0f, &cfg, kText);
+                break;
+            }
+        static ImVector<ImWchar> kanji;
+        if (kanji.empty()) {
+            ImFontGlyphRangesBuilder b;
+            b.AddText("設定映像画質音声操作遊戯侍道");
+            b.BuildRanges(&kanji);
+        }
+        for (const char* path : {"C:/Windows/Fonts/YuGothB.ttc", "C:/Windows/Fonts/msgothic.ttc",
+                                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"})
+            if (exists(path)) {
+                ImFontConfig cfg;
+                sMenuKanji = io.Fonts->AddFontFromFileTTF(path, 80.0f, &cfg, kanji.Data);
+                break;
+            }
+    }
     ImGui::StyleColorsDark();
     ImGui::GetStyle().Alpha = 0.95f;
     ImGui_ImplSDL2_InitForOpenGL(hal::gs::window(), hal::gs::gl_context());
@@ -1588,7 +1633,7 @@ void open_lighting() {
 }
 void close_lighting() {
     sLightOpen = false;
-    if (!sOpen && !sPhoto)
+    if (!sOpen && !sPhoto && !settings_menu::is_open())
         hal::gs::set_overlay(nullptr);
 }
 
@@ -1619,7 +1664,7 @@ void close_editor() {
     sCamSet = false;
     sDragging = false;
     hal::pad::set_blocked(false);
-    if (!sLightOpen && !sPhoto)
+    if (!sLightOpen && !sPhoto && !settings_menu::is_open())
         hal::gs::set_overlay(nullptr);
     if (sLevel.iomDirty || sLevel.colDirty)
         printf("[editor] closed with edits not saved (they stay until the map is loaded again)\n");
@@ -1639,7 +1684,21 @@ void save_graphics() {
         save_lighting_ini(hal::gs::lighting());
 }
 
+void show_overlay() {
+    ensure_imgui();
+    hal::gs::set_overlay(overlay);
+}
+ImFont* menu_font(int kind) { return kind == 1 ? sMenuTitle : kind == 2 ? sMenuKanji : sMenuFont; }
+bool tool_open() { return sOpen || sPhoto; }
+// Anything over the picture that wants the cursor (the mouse is let go).
+bool cursor_wanted() { return sOpen || sPhoto || sLightOpen || settings_menu::is_open(); }
+
 bool event(const SDL_Event& ev) {
+    // The PC settings menu (F1 / Esc): first, unless the editor or photo
+    // mode has the keyboard.
+    const bool escForPanel = sLightOpen && ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE;
+    if ((settings_menu::is_open() || (!sOpen && !sPhoto && !escForPanel)) && settings_menu::event(ev))
+        return true;
     if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F2) {
         if (sOpen) close_editor();
         else open_editor();
@@ -1782,4 +1841,4 @@ float Editor_Zoom() {
 
 extern "C" int Native_PhotoHideHud() { return sPhoto && sPhotoHideHud ? 1 : 0; }
 
-extern "C" int Native_EditorPaused() { return (sOpen && sPause) || sPhoto ? 1 : 0; }
+extern "C" int Native_EditorPaused() { return (sOpen && sPause) || sPhoto || settings_menu::is_open() ? 1 : 0; }

@@ -77,6 +77,8 @@ void* Scene_BaseDtor(void* mem, int flag) {
     return self;
 }
 
+extern "C" int Native_TakeTitleRequest();           // native/settings_menu.cpp
+
 // ── 0x1E24C0 Scene_CheckSoftReset ─────────────────────────────────────────
 // Start + Select + L1 + R1 held for two seconds, while no fade is running.
 int Scene_CheckSoftReset(void* mem) {
@@ -88,7 +90,7 @@ int Scene_CheckSoftReset(void* mem) {
     else
         self->softResetHold = 0;
 
-    bool reset = (s32)self->softResetHold > *gFrameRate * 2;
+    bool reset = (s32)self->softResetHold > *gFrameRate * 2 || Native_TakeTitleRequest() != 0;
     if (reset) {
         Bgm_StopAll(1);
         Sound_PlaySE(5, 0, 0x3FFF);

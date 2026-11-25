@@ -34,6 +34,21 @@ static constexpr KeyMap KEY_MAP[] = {
     { SDLK_v,         hal::pad::R3       },     // (R3: the camera back behind)
 };
 
+// The mouse (PC settings): relative motion for the camera, its buttons,
+// whether the cursor is taken, and which kind of input came last.
+static bool s_cursorNeeded = false, s_captureArmed = true, s_lastKeyboard = true;
+static float s_mouseLook[2] = {0.0f, 0.0f};      // this frame's turn and tilt, radians
+static int s_wheel = 0;                          // notches since the last poll (+ up)
+
+// PC settings (settings menu): bindings, camera and sticks.
+static hal::pad::Config s_config;
+static bool s_configReady = false;
+static const hal::pad::Button kActionButton[hal::pad::kButtonActions] = {
+    hal::pad::START, hal::pad::SELECT, hal::pad::UP, hal::pad::DOWN, hal::pad::LEFT, hal::pad::RIGHT,
+    hal::pad::CROSS, hal::pad::CIRCLE, hal::pad::SQUARE, hal::pad::TRIANGLE,
+    hal::pad::L1, hal::pad::R1, hal::pad::L2, hal::pad::R2, hal::pad::L3, hal::pad::R3,
+};
+
 // Debug aid: the left stick held at (x, y) for the next two polls.
 static u8  s_debugStick[2] = {0x80, 0x80};
 static int s_debugStickFrames = 0;
@@ -137,11 +152,12 @@ static void scan_controllers() {
 // 71 %, short of the 75 % the game takes for "run" (it tests the axes one by
 // one, 0x1C76B0), where the PS2's stick reads nearly full on both.  So the
 // circle is stretched toward the square, by up to 1.3.
-static void stick_bytes(SDL_GameController* pad, SDL_GameControllerAxis ax, SDL_GameControllerAxis ay, u8* bx, u8* by) {
+static void stick_bytes(SDL_GameController* pad, SDL_GameControllerAxis ax, SDL_GameControllerAxis ay, u8* bx, u8* by,
+                        float deadzone = 0.21f) {
     float x = SDL_GameControllerGetAxis(pad, ax) / 32767.0f, y = SDL_GameControllerGetAxis(pad, ay) / 32767.0f;
     const float len = sqrtf(x * x + y * y);
     *bx = *by = 0x80;
-    if (len < 0.21f)                    // a worn stick does not rest at the centre
+    if (len < deadzone)                 // a worn stick does not rest at the centre
         return;
     const float most = fabsf(x) > fabsf(y) ? fabsf(x) : fabsf(y);
     float gain = len / most;
@@ -180,11 +196,59 @@ void poll() {
         scan_controllers();
     }
     const u8* keys = SDL_GetKeyboardState(nullptr);
+    const Config cfg = config();
+    auto held = [&](int action) {
+        const int sc = cfg.keys[action];
+        return sc > SDL_SCANCODE_UNKNOWN && sc < SDL_NUM_SCANCODES && keys[sc];
+    };
     u16 pressed = 0xFFFF;
-    for (const auto& km : KEY_MAP) {
-        SDL_Scancode sc = SDL_GetScancodeFromKey(km.key);
-        if (keys[sc])
-            pressed &= ~static_cast<u16>(km.btn);  // 0 = pressed
+    for (int a = 0; a < kButtonActions; a++)
+        if (held(a))
+            pressed &= ~static_cast<u16>(kActionButton[a]);  // 0 = pressed
+
+    // The mouse: taken while playing (relative mode), let go for tools, the
+    // menu, another window; a click on the window takes it again (that click
+    // does nothing in the game).
+    SDL_Window* window = hal::gs::window();
+    const bool focused = window != nullptr && SDL_GetKeyboardFocus() == window;
+    if (!focused)
+        s_captureArmed = false;
+    int mx = 0, my = 0;
+    const Uint32 mouseButtons = SDL_GetRelativeMouseState(&mx, &my);
+    bool swallowClick = false;
+    if (focused && !s_captureArmed && mouseButtons != 0 && !s_blocked && !s_cursorNeeded) {
+        s_captureArmed = true;
+        swallowClick = true;
+    }
+    const bool capture = cfg.mouseCapture && focused && s_captureArmed && !s_blocked && !s_cursorNeeded;
+    if ((SDL_GetRelativeMouseMode() == SDL_TRUE) != capture) {
+        SDL_SetRelativeMouseMode(capture ? SDL_TRUE : SDL_FALSE);
+        mx = my = 0;
+    }
+    if (capture && !swallowClick) {
+        for (int a = 0; a < kButtonActions; a++) {
+            const int in = cfg.mouse[a];
+            bool down = false;
+            if (in >= 1 && in <= 5)
+                down = (mouseButtons & SDL_BUTTON(in)) != 0;
+            else if (in == kMouseWheelUp)
+                down = s_wheel > 0;
+            else if (in == kMouseWheelDown)
+                down = s_wheel < 0;
+            if (down)
+                pressed &= ~static_cast<u16>(kActionButton[a]);
+        }
+    }
+    s_wheel = 0;
+    // The camera from the mouse: this frame's motion in radians, given to the
+    // follow camera directly (camera.cpp) — the stick's dead zone would eat
+    // small movements and its speed limit large ones.
+    {
+        const float gain = 0.0012f * cfg.mouseSensitivity;    // about 70 degrees per 1000 pixels at 1.0
+        s_mouseLook[0] = capture ? mx * gain : 0.0f;
+        s_mouseLook[1] = capture ? my * gain * (cfg.mouseInvertY ? -1.0f : 1.0f) : 0.0f;
+        if (mx != 0 || my != 0 || (capture && mouseButtons != 0))
+            s_lastKeyboard = true;
     }
     int frame = hal::gs::frame_count();
     for (const auto& sp : s_script)
@@ -197,15 +261,18 @@ void poll() {
     // the way (all the way with Left Shift), J / L and I / K push the right.
     for (int port = 0; port < 2; port++)
         s_lx[port] = s_ly[port] = s_rx[port] = s_ry[port] = 0x80;
-    const int tilt = keys[SDL_SCANCODE_LSHIFT] ? 0x7F : 0x48;
-    if (keys[SDL_SCANCODE_F]) s_lx[0] = (u8)(0x80 - tilt);
-    if (keys[SDL_SCANCODE_H]) s_lx[0] = (u8)(0x80 + tilt);
-    if (keys[SDL_SCANCODE_T]) s_ly[0] = (u8)(0x80 - tilt);
-    if (keys[SDL_SCANCODE_G]) s_ly[0] = (u8)(0x80 + tilt);
-    if (keys[SDL_SCANCODE_J]) s_rx[0] = 0x00;
-    if (keys[SDL_SCANCODE_L]) s_rx[0] = 0xFF;
-    if (keys[SDL_SCANCODE_I]) s_ry[0] = 0x00;
-    if (keys[SDL_SCANCODE_K]) s_ry[0] = 0xFF;
+    const bool modifier = held(kWalkFull);
+    const int tilt = (cfg.walkDefaultFull ? !modifier : modifier) ? 0x7F : 0x48;
+    for (int a = 0; a < kActions; a++)
+        if (held(a)) { s_lastKeyboard = true; break; }
+    if (held(kLStickLeft))  s_lx[0] = (u8)(0x80 - tilt);
+    if (held(kLStickRight)) s_lx[0] = (u8)(0x80 + tilt);
+    if (held(kLStickUp))    s_ly[0] = (u8)(0x80 - tilt);
+    if (held(kLStickDown))  s_ly[0] = (u8)(0x80 + tilt);
+    if (held(kRStickLeft))  s_rx[0] = 0x00;
+    if (held(kRStickRight)) s_rx[0] = 0xFF;
+    if (held(kRStickUp))    s_ry[0] = 0x00;
+    if (held(kRStickDown))  s_ry[0] = 0xFF;
     // Debug: WOTS2_LSTICK="x,y" (0–255) holds the left stick somewhere.
     // ("from:x,y" only from that frame on.)
     // ("from:x,y;from:x,y…": a step at each; the last one begun holds.)
@@ -244,33 +311,42 @@ void poll() {
         s_ly[0] = s_debugStick[1];
     }
 
-    static constexpr struct { SDL_GameControllerButton from; Button to; } kButtons[] = {
-        {SDL_CONTROLLER_BUTTON_A, CROSS}, {SDL_CONTROLLER_BUTTON_B, CIRCLE},
-        {SDL_CONTROLLER_BUTTON_X, SQUARE}, {SDL_CONTROLLER_BUTTON_Y, TRIANGLE},
-        {SDL_CONTROLLER_BUTTON_BACK, SELECT}, {SDL_CONTROLLER_BUTTON_START, START},
-        {SDL_CONTROLLER_BUTTON_LEFTSTICK, L3}, {SDL_CONTROLLER_BUTTON_RIGHTSTICK, R3},
-        {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, L1}, {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, R1},
-        {SDL_CONTROLLER_BUTTON_DPAD_UP, UP}, {SDL_CONTROLLER_BUTTON_DPAD_DOWN, DOWN},
-        {SDL_CONTROLLER_BUTTON_DPAD_LEFT, LEFT}, {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, RIGHT},
-    };
     for (int port = 0; port < 2; port++) {
         SDL_GameController* pad = s_pads[port];
         if (!pad)
             continue;
-        for (const auto& b : kButtons)
-            if (SDL_GameControllerGetButton(pad, b.from))
-                s_buttons[port] &= ~static_cast<u16>(b.to);
-        if (SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 12000)
-            s_buttons[port] &= ~static_cast<u16>(L2);
-        if (SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 12000)
-            s_buttons[port] &= ~static_cast<u16>(R2);
+        for (int a = 0; a < kButtonActions; a++) {
+            const int in = cfg.pad[a];
+            bool down = false;
+            if (in >= 0 && in < SDL_CONTROLLER_BUTTON_MAX)
+                down = SDL_GameControllerGetButton(pad, (SDL_GameControllerButton)in) != 0;
+            else if (in == kPadLeftTrigger)
+                down = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 12000;
+            else if (in == kPadRightTrigger)
+                down = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 12000;
+            if (down) {
+                s_buttons[port] &= ~static_cast<u16>(kActionButton[a]);
+                s_lastKeyboard = false;
+            }
+        }
         u8 lx, ly, rx, ry;
-        stick_bytes(pad, SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, &lx, &ly);
-        stick_bytes(pad, SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY, &rx, &ry);
+        stick_bytes(pad, SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, &lx, &ly, cfg.deadzone);
+        stick_bytes(pad, SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY, &rx, &ry, cfg.deadzone);
         if (lx != 0x80) s_lx[port] = lx;        // (a key held wins over a stick at rest)
         if (ly != 0x80) s_ly[port] = ly;
         if (rx != 0x80) s_rx[port] = rx;
         if (ry != 0x80) s_ry[port] = ry;
+    }
+    // The camera (right stick), keys and controller alike: sensitivity and inversion.
+    for (int port = 0; port < 2; port++) {
+        auto shape = [&](u8& v, bool invert) {
+            float d = ((int)v - 0x80) * cfg.cameraSensitivity;
+            if (invert) d = -d;
+            const int out = 0x80 + (int)lroundf(d);
+            v = (u8)(out < 0 ? 0 : out > 0xFF ? 0xFF : out);
+        };
+        if (s_rx[port] != 0x80) shape(s_rx[port], cfg.invertX);
+        if (s_ry[port] != 0x80) shape(s_ry[port], cfg.invertY);
     }
     if (s_blocked)
         for (int port = 0; port < 2; port++) {
@@ -280,6 +356,84 @@ void poll() {
 }
 
 void set_blocked(bool blocked) { s_blocked = blocked; }
+void set_cursor_needed(bool needed) { s_cursorNeeded = needed; }
+void take_mouse_look(float* yaw, float* pitch) {
+    *yaw = s_blocked ? 0.0f : s_mouseLook[0];
+    *pitch = s_blocked ? 0.0f : s_mouseLook[1];
+    s_mouseLook[0] = s_mouseLook[1] = 0.0f;
+}
+bool last_input_keyboard() { return s_lastKeyboard; }
+// (The wheel comes as events: hle.cpp's pump hands them here.)
+void mouse_wheel(int notches) { s_wheel += notches; }
+
+static Config base_config() {
+    Config c;
+    for (int& k : c.keys) k = SDL_SCANCODE_UNKNOWN;
+    for (int& m : c.mouse) m = -1;
+    const int pad[kButtonActions] = {
+        SDL_CONTROLLER_BUTTON_START, SDL_CONTROLLER_BUTTON_BACK,
+        SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+        SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+        SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_X, SDL_CONTROLLER_BUTTON_Y,
+        SDL_CONTROLLER_BUTTON_LEFTSHOULDER, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+        kPadLeftTrigger, kPadRightTrigger,
+        SDL_CONTROLLER_BUTTON_LEFTSTICK, SDL_CONTROLLER_BUTTON_RIGHTSTICK,
+    };
+    for (int a = 0; a < kButtonActions; a++) c.pad[a] = pad[a];
+    return c;
+}
+Config classic_config() {
+    Config c = base_config();
+    for (const auto& km : KEY_MAP)
+        for (int a = 0; a < kButtonActions; a++)
+            if (kActionButton[a] == km.btn)
+                c.keys[a] = SDL_GetScancodeFromKey(km.key);
+    c.keys[kLStickUp] = SDL_SCANCODE_T;    c.keys[kLStickDown] = SDL_SCANCODE_G;
+    c.keys[kLStickLeft] = SDL_SCANCODE_F;  c.keys[kLStickRight] = SDL_SCANCODE_H;
+    c.keys[kRStickUp] = SDL_SCANCODE_I;    c.keys[kRStickDown] = SDL_SCANCODE_K;
+    c.keys[kRStickLeft] = SDL_SCANCODE_J;  c.keys[kRStickRight] = SDL_SCANCODE_L;
+    c.keys[kWalkFull] = SDL_SCANCODE_LSHIFT;
+    c.walkDefaultFull = false;
+    c.mouse[kSquare - 0] = SDL_BUTTON_LEFT;
+    c.mouse[kR1] = SDL_BUTTON_RIGHT;
+    c.mouse[kR3] = SDL_BUTTON_MIDDLE;
+    return c;
+}
+Config default_config() {
+    Config c = base_config();
+    c.keys[kStart] = SDL_SCANCODE_RETURN;      c.keys[kSelect] = SDL_SCANCODE_TAB;
+    c.keys[kUp] = SDL_SCANCODE_UP;             c.keys[kDown] = SDL_SCANCODE_DOWN;
+    c.keys[kLeft] = SDL_SCANCODE_LEFT;         c.keys[kRight] = SDL_SCANCODE_RIGHT;
+    c.keys[kCross] = SDL_SCANCODE_SPACE;       c.keys[kCircle] = SDL_SCANCODE_E;
+    c.keys[kSquare] = SDL_SCANCODE_UNKNOWN;    c.keys[kTriangle] = SDL_SCANCODE_F;
+    c.keys[kL1] = SDL_SCANCODE_Q;              c.keys[kR1] = SDL_SCANCODE_UNKNOWN;
+    c.keys[kL2] = SDL_SCANCODE_Z;              c.keys[kR2] = SDL_SCANCODE_C;
+    c.keys[kL3] = SDL_SCANCODE_LSHIFT;         c.keys[kR3] = SDL_SCANCODE_R;
+    c.keys[kLStickUp] = SDL_SCANCODE_W;        c.keys[kLStickDown] = SDL_SCANCODE_S;
+    c.keys[kLStickLeft] = SDL_SCANCODE_A;      c.keys[kLStickRight] = SDL_SCANCODE_D;
+    c.keys[kRStickUp] = SDL_SCANCODE_I;        c.keys[kRStickDown] = SDL_SCANCODE_K;
+    c.keys[kRStickLeft] = SDL_SCANCODE_J;      c.keys[kRStickRight] = SDL_SCANCODE_L;
+    c.keys[kWalkFull] = SDL_SCANCODE_LCTRL;
+    c.walkDefaultFull = true;
+    c.mouse[kSquare] = SDL_BUTTON_LEFT;
+    c.mouse[kR1] = SDL_BUTTON_RIGHT;
+    c.mouse[kR3] = SDL_BUTTON_MIDDLE;
+    return c;
+}
+Config config() {
+    if (!s_configReady) { s_config = default_config(); s_configReady = true; }
+    return s_config;
+}
+void set_config(const Config& c) { s_config = c; s_configReady = true; }
+const char* action_id(int a) {
+    static const char* const kIds[kActions] = {
+        "start", "select", "up", "down", "left", "right", "cross", "circle", "square", "triangle",
+        "l1", "r1", "l2", "r2", "l3", "r3",
+        "lstick_up", "lstick_down", "lstick_left", "lstick_right",
+        "rstick_up", "rstick_down", "rstick_left", "rstick_right", "walk_full",
+    };
+    return a >= 0 && a < kActions ? kIds[a] : "";
+}
 
 u16 get_buttons(u32 port) { return port < 2 ? s_buttons[port] : 0xFFFF; }
 u8  get_left_x(u32 port)  { return port < 2 ? s_lx[port] : 128; }
@@ -292,6 +446,10 @@ bool connected(u32 port) { return port == 0 || (port < 2 && s_pads[port] != null
 void rumble(u32 port, bool small, u8 big) {
     if (port >= 2 || !s_pads[port])
         return;
+    if (!config().rumble) {
+        small = false;
+        big = 0;
+    }
     SDL_GameControllerRumble(s_pads[port], (Uint16)(big * 257), small ? 0xFFFF : 0, small || big ? 250 : 0);
 }
 

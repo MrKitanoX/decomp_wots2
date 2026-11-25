@@ -152,8 +152,13 @@ static u8* PlayerParams() {
 static s16& ParamHealth(u8* params) { return *reinterpret_cast<s16*>(params + 0x40); }
 static s16& ParamHealthMax(u8* params) { return *reinterpret_cast<s16*>(params + 0x42); }
 
+// Native (PC settings menu): is the game itself (not the title) running?
+static int sGameplayAlive = 0;
+extern "C" int Native_InGameplay() { return sGameplayAlive > 0 ? 1 : 0; }
+
 // ── 0x2B2230 ──────────────────────────────────────────────────────────────
 GameplayScene* GameplayScene_Ctor(GameplayScene* self) {
+    sGameplayAlive++;
     Scene_BaseCtor(self);
     self->vtable = 0x2ED710;
     CharaResources_Load(CharaResources_Get(), 0);
@@ -262,6 +267,8 @@ static void DestroyStatus(GameplayScene* self) {
 GameplayScene* GameplayScene_Destroy(GameplayScene* self, s16 flag) {
     if (!self)
         return self;
+    if (sGameplayAlive > 0)
+        sGameplayAlive--;
     self->vtable = 0x2ED710;
     SkillSheets_Reset(SkillSheets_Get());       // 0x23DC20, 0x23DB90
     DestroyField(self);

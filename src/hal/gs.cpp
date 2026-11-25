@@ -2530,12 +2530,47 @@ namespace hal::gs {
 static void apply_window() {
     if (s_window == nullptr)
         return;
-    const bool full = (SDL_GetWindowFlags(s_window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-    if (full != s_video.fullscreen)
-        SDL_SetWindowFullscreen(s_window, s_video.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-    if (!s_video.fullscreen && s_video.windowWidth > 0 && s_video.windowHeight > 0) {
-        SDL_SetWindowSize(s_window, s_video.windowWidth, s_video.windowHeight);
-        SDL_SetWindowPosition(s_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    const Uint32 flags = SDL_GetWindowFlags(s_window);
+    const bool desktopFull = (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP;
+    const bool exclusiveFull = (flags & SDL_WINDOW_FULLSCREEN) != 0 && !desktopFull;
+    int have = exclusiveFull ? 2 : desktopFull ? 1 : 0;
+    const int want = !s_video.fullscreen ? 0 : s_video.exclusive ? 2 : 1;
+    const int displays = SDL_GetNumVideoDisplays();
+    const int current = SDL_GetWindowDisplayIndex(s_window);
+    const int display = s_video.display >= 0 && s_video.display < displays ? s_video.display : (current < 0 ? 0 : current);
+    const bool move = display != current;
+    // Exclusive: the display mode nearest to the one asked for (0 = the desktop's).
+    SDL_DisplayMode mode = {};
+    bool modeDiffers = false;
+    if (want == 2) {
+        SDL_DisplayMode desk = {}, asked = {};
+        SDL_GetDesktopDisplayMode(display, &desk);
+        asked.w = s_video.modeWidth > 0 ? s_video.modeWidth : desk.w;
+        asked.h = s_video.modeHeight > 0 ? s_video.modeHeight : desk.h;
+        asked.refresh_rate = s_video.modeRefresh > 0 ? s_video.modeRefresh : desk.refresh_rate;
+        if (SDL_GetClosestDisplayMode(display, &asked, &mode) == nullptr)
+            mode = desk;
+        SDL_DisplayMode now = {};
+        if (SDL_GetWindowDisplayMode(s_window, &now) == 0)
+            modeDiffers = now.w != mode.w || now.h != mode.h || now.refresh_rate != mode.refresh_rate;
+    }
+    if (have != 0 && (want != have || move || (want == 2 && modeDiffers))) {
+        SDL_SetWindowFullscreen(s_window, 0);
+        have = 0;
+    }
+    if (move)
+        SDL_SetWindowPosition(s_window, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+    if (want == 2)
+        SDL_SetWindowDisplayMode(s_window, &mode);
+    if (want != have)
+        SDL_SetWindowFullscreen(s_window, want == 2 ? SDL_WINDOW_FULLSCREEN : want == 1 ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    if (want == 0 && s_video.windowWidth > 0 && s_video.windowHeight > 0) {
+        int w = 0, h = 0;
+        SDL_GetWindowSize(s_window, &w, &h);
+        if (w != s_video.windowWidth || h != s_video.windowHeight || move) {
+            SDL_SetWindowSize(s_window, s_video.windowWidth, s_video.windowHeight);
+            SDL_SetWindowPosition(s_window, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+        }
     }
     // Debug: WOTS2_FAST=1 runs as fast as it can (scripted test runs).
     SDL_GL_SetSwapInterval(getenv("WOTS2_FAST") || !s_video.vsync ? 0 : 1);
@@ -2865,6 +2900,59 @@ static void debug_frame_hooks() {
 static void (*s_overlay)() = nullptr;
 static int s_presentRect[4] = {0, 0, 640, 448};
 
+// PC settings: the frame drawn to the window through brightness and gamma
+// (a full-screen triangle pair made from gl_VertexID; no buffers).
+static GLuint s_adjustProgram = 0, s_adjustVao = 0;
+static GLint s_adjustRect = -1, s_adjustParams = -1;
+static void present_adjusted(int x0, int y0, int x1, int y1) {
+    if (s_adjustProgram == 0) {
+        static const char* vs =
+            "#version 330 core\n"
+            "out vec2 vUv;\n"
+            "void main() {\n"
+            "  vec2 p = vec2(float((gl_VertexID & 1) != 0), float(gl_VertexID >= 2));\n"
+            "  vUv = vec2(p.x, 1.0 - p.y);\n"
+            "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+            "}\n";
+        static const char* fs =
+            "#version 330 core\n"
+            "in vec2 vUv; out vec4 oColor;\n"
+            "uniform sampler2D uFrame; uniform vec2 uParams;\n"
+            "void main() {\n"
+            "  vec3 c = texture(uFrame, vUv).rgb;\n"
+            "  c = pow(max(c, vec3(0.0)), vec3(1.0 / uParams.y)) * uParams.x;\n"
+            "  oColor = vec4(clamp(c, 0.0, 1.0), 1.0);\n"
+            "}\n";
+        GLuint v = compile(GL_VERTEX_SHADER, vs), f = compile(GL_FRAGMENT_SHADER, fs);
+        s_adjustProgram = glCreateProgram();
+        glAttachShader(s_adjustProgram, v);
+        glAttachShader(s_adjustProgram, f);
+        glLinkProgram(s_adjustProgram);
+        glDeleteShader(v);
+        glDeleteShader(f);
+        glUseProgram(s_adjustProgram);
+        glUniform1i(glGetUniformLocation(s_adjustProgram, "uFrame"), 0);
+        s_adjustParams = glGetUniformLocation(s_adjustProgram, "uParams");
+        glGenVertexArrays(1, &s_adjustVao);
+    }
+    (void)s_adjustRect;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(x0, y0, x1 - x0, y1 - y0);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glUseProgram(s_adjustProgram);
+    glUniform2f(s_adjustParams, s_video.brightness, s_video.gamma > 0.1f ? s_video.gamma : 0.1f);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_fboTex);
+    glBindVertexArray(s_adjustVao);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(s_vao);
+    glUseProgram(s_program);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_fbo);
+}
+
 // The finished frame to the window: stretched over it as a TV would, or —
 // when a shape was asked for — at that shape with black round it.
 static void present() {
@@ -2886,7 +2974,10 @@ static void present() {
             glClear(GL_COLOR_BUFFER_BIT);
         }
     }
-    glBlitFramebuffer(0, s_physH, s_physW, 0, x0, y0, x1, y1, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    if (s_video.brightness != 1.0f || s_video.gamma != 1.0f)
+        present_adjusted(x0, y0, x1, y1);
+    else
+        glBlitFramebuffer(0, s_physH, s_physW, 0, x0, y0, x1, y1, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     s_presentRect[0] = x0; s_presentRect[1] = y0; s_presentRect[2] = x1; s_presentRect[3] = y1;
     if (s_overlay != nullptr) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);

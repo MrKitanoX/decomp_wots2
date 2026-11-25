@@ -45,3 +45,6 @@ mods/original_story/story/generated/
 
 # Photo mode pictures (F7, F12)
 screenshots/
+
+# The translation mod's files are made from the player's disc by the installer
+mods/ptbr/files/

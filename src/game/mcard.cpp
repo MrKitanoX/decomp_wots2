@@ -975,6 +975,88 @@ bool IsCorrupt(s32 r) {
 
 }  // namespace
 
+// ═══ Native (PC settings menu): saving at any moment, outside a scene ═════
+// The whole save file is read, the game in memory written into the slot asked
+// for (as GameToSlot does for the current one), the sums made afresh and the
+// file written back.  → 0, or a negative reason: -1 no save file yet, -2 the
+// card is in use, -3 reading failed, -4 writing failed, -5 no game in memory.
+extern "C" int Native_QuickSave(int slot) {
+    if (slot < 0 || slot > 2)
+        return -1;
+    if (mc::is_open())
+        return -2;
+    const s32 state = *reinterpret_cast<s32*>(*gPlayerData);
+    if (state < 1 || state > 3)
+        return -5;
+    std::vector<u8> d(kSaveSize);
+    mc::open(0, kDataPath, 1);
+    if (mc::result() != 0) {
+        mc::close();
+        return -1;
+    }
+    mc::read(d.data(), kSaveSize);
+    const bool readOk = mc::result() == (s32)kSaveSize;
+    mc::close();
+    if (!readOk)
+        return -3;
+    memcpy(d.data() + 4, &slot, 4);
+    memcpy(Slot(d.data(), slot), *gPlayerData, kSlotSize);
+    // As the game does on its own Save (gameplay_scene.cpp, kPlaySave):
+    // loading carries on at the area map.
+    const s32 inProgress = 2;
+    memcpy(Slot(d.data(), slot), &inProgress, 4);
+    SlotSum(d.data(), slot) = 0;
+    memcpy(SlotConfig(d.data(), slot), *gConfigData, 0x40);
+    Reseal(d.data());
+    mc::open(0, kDataPath, 0x200);
+    if (mc::result() != 0) {
+        mc::close();
+        return -4;
+    }
+    mc::write(d.data(), kSaveSize);
+    const bool writeOk = mc::result() == (s32)kSaveSize;
+    mc::close();
+    if (!writeOk)
+        return -4;
+    *gCurrentSlot = slot;
+    printf("[settings] quick save into slot %d (day %d)\n", slot + 1, (*gPlayerData)[0x100] + 1);
+    return 0;
+}
+
+// What the three slots hold: used[i] (1 a game in it), day[i] (1-based) and
+// period[i] (0 dawn ... 4 late night).  → false without a save file.
+extern "C" int Native_SlotInfo(int used[3], int day[3], int period[3], int* current) {
+    *current = *gCurrentSlot;
+    for (int i = 0; i < 3; i++)
+        used[i] = day[i] = period[i] = 0;
+    if (mc::is_open())
+        return 0;
+    std::vector<u8> d(kSaveSize);
+    mc::open(0, kDataPath, 1);
+    if (mc::result() != 0) {
+        mc::close();
+        return 0;
+    }
+    mc::read(d.data(), kSaveSize);
+    const bool ok = mc::result() == (s32)kSaveSize;
+    mc::close();
+    if (!ok)
+        return 0;
+    for (int i = 0; i < 3; i++) {
+        used[i] = SlotUsed(d.data(), i) ? 1 : 0;
+        day[i] = Slot(d.data(), i)[0x100] + 1;
+        period[i] = Slot(d.data(), i)[0x101];
+    }
+    return 1;
+}
+// Is there a game in memory (begun, not the title's blank one)?
+extern "C" int Native_InGameplay();     // gameplay_scene.cpp
+extern "C" int Native_GameInProgress() {
+    const s32 state = *reinterpret_cast<s32*>(*gPlayerData);
+    return Native_InGameplay() != 0 && state >= 1 && state <= 3 ? 1 : 0;
+}
+
+
 extern "C" {
 
 // ═══ The boot check (0x260100–0x260EB0) ═══════════════════════════════════

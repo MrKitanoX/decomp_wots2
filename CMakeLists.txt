@@ -150,6 +150,8 @@ add_library(native STATIC
     src/native/mcard_native.cpp
     src/native/mods.cpp
     src/native/editor.cpp
+    src/native/settings_menu.cpp
+    src/native/ini.cpp
     src/native/enhancements.cpp
 )
 target_include_directories(native PUBLIC include)
@@ -205,6 +207,23 @@ elseif(APPLE)
     target_link_libraries(wots2 PRIVATE game native game native hal imgui -Wl,-pagezero_size,0x10000)
 else()
     target_link_libraries(wots2 PRIVATE -Wl,--start-group game native -Wl,--end-group hal imgui SDL2::SDL2main ${CMAKE_DL_LIBS})
+endif()
+
+# ── The installer: the player's disc in, the game (and the translation) out ──
+add_executable(wots2_setup src/setup/setup.cpp src/native/launcher.cpp src/native/ini.cpp)
+target_include_directories(wots2_setup PRIVATE include)
+set_target_properties(wots2_setup PROPERTIES OUTPUT_NAME "WotS2-Instalador")
+target_link_libraries(wots2_setup PRIVATE imgui)
+if(LibArchive_FOUND)
+    target_compile_definitions(wots2_setup PRIVATE WOTS2_LIBARCHIVE)
+    target_include_directories(wots2_setup PRIVATE ${LibArchive_INCLUDE_DIRS})
+    target_link_libraries(wots2_setup PRIVATE ${LibArchive_LIBRARIES})
+endif()
+if(WIN32)
+    target_link_libraries(wots2_setup PRIVATE opengl32 comdlg32 shell32 -mwindows -static-libgcc -static-libstdc++
+        -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+else()
+    target_link_libraries(wots2_setup PRIVATE OpenGL::GL)
 endif()
 
 # ── Mods (mods/<name>/<name>.cpp → mods/<name>/<name>.so, beside its mod.ini) ──

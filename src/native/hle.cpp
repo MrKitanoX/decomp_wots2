@@ -459,16 +459,23 @@ void PadMgr_Init(void*) {}
 //         sixteen of the big one (strength); +0x60 frames a step lasts,
 //         +0x62 frames left, +0x64 step, +0x66 frames into it
 // and 0x307580 + port × 4 counts frames with nothing touched.
+extern "C" void Native_SettingsOpen();     // native/settings_menu.cpp
 void PadMgr_Poll(void*) {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (editor::event(ev))                  // the level editor (F2) took it
             continue;
-        if (ev.type == SDL_QUIT ||
-            (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE)) {
+        if (ev.type == SDL_QUIT) {
             printf("clean exit\n");
             exit(0);
         }
+        // Esc: the PC settings menu (it has "Sair do jogo").
+        if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_ESCAPE) {
+            Native_SettingsOpen();
+            continue;
+        }
+        if (ev.type == SDL_MOUSEWHEEL)
+            hal::pad::mouse_wheel(ev.wheel.y > 0 ? 1 : ev.wheel.y < 0 ? -1 : 0);
         // F11: the whole screen, and back.
         if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 && ev.key.keysym.sym == SDLK_F11)
             hal::gs::toggle_fullscreen();
@@ -481,6 +488,7 @@ void PadMgr_Poll(void*) {
             hle_ask_where();
         }
     }
+    hal::pad::set_cursor_needed(editor::cursor_wanted());
     hal::pad::poll();
 
     for (int port = 0; port < 2; port++) {

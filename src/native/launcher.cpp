@@ -601,6 +601,14 @@ std::string locate(int argc, char* argv[]) {
             fprintf(stderr, "[launcher] the game's files are not in %s\n", dest.c_str());
             usage(1);
         }
+#ifdef _WIN32
+        // The release package has an installer (src/setup): it unpacks the
+        // disc and makes the translation too, so it is the one to ask.
+        if (is_file("WotS2-Instalador.exe")) {
+            _spawnl(_P_NOWAIT, "WotS2-Instalador.exe", "WotS2-Instalador.exe", nullptr);
+            exit(0);
+        }
+#endif
         dest = ask_and_extract(dest);
     }
 

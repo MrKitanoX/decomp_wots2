@@ -25,6 +25,7 @@
 #include "game/chara_resources.h"
 #include "game/map_collision.h"
 #include "native/guest.h"
+#include "hal/pad.h"
 
 #include <cmath>
 #include <cstring>
@@ -1261,6 +1262,9 @@ void* FollowCam_Ctor(void* mem, void* target, const void* config) {
     return mem;
 }
 
+// Native: the tilt the mouse has given the follow camera (radians, kept).
+static float sMouseTilt = 0.0f;
+
 // ── 0x151F90 ──────────────────────────────────────────────────────────────
 int FollowCam_Compute(FollowCam* self, CamList*, CamWish* wish) {
     self->mode = *reinterpret_cast<u32*>(*gConfig + 0x10);
@@ -1272,6 +1276,7 @@ int FollowCam_Compute(FollowCam* self, CamList*, CamWish* wish) {
         Copy(self->anchor, self->config.eye);
         Apply(self->anchor, Follow_Matrix(self), self->anchor);
         self->tilt = 0.0f;
+        sMouseTilt = 0.0f;
     }
     Apply(wish->look, who->matrix, self->config.look);
     Apply(wish->nearLook, who->matrix, self->config.nearLook);
@@ -1288,6 +1293,13 @@ int FollowCam_Compute(FollowCam* self, CamList*, CamWish* wish) {
     Pad_GetRightStick(pads, 0, &sx, &sy);
     float swing = -(float)StickAxis(sx) / 128.0f * 0.1f;
     const float tilt = -(float)StickAxis(sy) / 128.0f * 0.1f;
+    // Native: the mouse turns the camera itself (and holds its tilt).
+    float mouseYaw = 0.0f, mousePitch = 0.0f;
+    hal::pad::take_mouse_look(&mouseYaw, &mousePitch);
+    swing -= mouseYaw;
+    sMouseTilt -= mousePitch;
+    if (sMouseTilt < self->config.tiltMin) sMouseTilt = self->config.tiltMin;
+    if (self->config.tiltMax < sMouseTilt) sMouseTilt = self->config.tiltMax;
     if (swing == 0.0f && tilt == 0.0f) {
         self->stick = 0;
     } else if (self->stick == 0) {
@@ -1306,9 +1318,12 @@ int FollowCam_Compute(FollowCam* self, CamList*, CamWish* wish) {
         self->tilt = self->config.tiltMax;
     if (self->mode & 2)
         swing = -swing;
+    float tiltNow = self->tilt + sMouseTilt;
+    if (tiltNow < self->config.tiltMin) tiltNow = self->config.tiltMin;
+    if (self->config.tiltMax < tiltNow) tiltNow = self->config.tiltMax;
     alignas(16) float turn[16];
     Matrix_Identity(turn);
-    RotateX(turn, turn, self->tilt);
+    RotateX(turn, turn, tiltNow);
     Matrix_Rotate(turn, turn, swing);
     Apply(wish->eye, turn, self->config.eye);
     Apply(wish->eye, frame, wish->eye);

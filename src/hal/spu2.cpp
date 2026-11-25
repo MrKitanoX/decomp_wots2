@@ -1,8 +1,10 @@
 #include "hal/spu2.h"
 #include <SDL2/SDL.h>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <cstdlib>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -28,6 +30,7 @@ struct Stream {
     bool open = false, playing = false, loop = false, paused = false, ended = false;
     float volume[2] = {1.0f, 1.0f};
     float gain = 1.0f, gainStep = 0.0f;     // fades
+    int  category = hal::spu2::kMusic;
 };
 static Stream s_streams[hal::spu2::kStreamSlots];
 
@@ -91,10 +94,19 @@ static void mix(s16* dst, int frames);
 // Master volume: WOTS2_VOLUME=0…100, default 35.  The game's own full volume
 // is full scale, which is far too loud on a desktop.
 static float s_master = 0.35f;
+// PC settings (settings menu): per-category volumes, pause and mute.
+static float s_category[hal::spu2::kCategories] = {1.0f, 1.0f, 1.0f, 1.0f};
+static volatile bool s_paused = false, s_muted = false;
 
 static void audio_callback(void*, Uint8* out, int bytes) {
     memset(out, 0, (size_t)bytes);
+    if (s_paused)               // nothing advances: the game resumes where it was
+        return;
     mix(reinterpret_cast<s16*>(out), bytes / 4);
+    if (s_muted) {
+        memset(out, 0, (size_t)bytes);
+        return;
+    }
     s16* samples = reinterpret_cast<s16*>(out);
     for (int i = 0; i < bytes / 2; i++)
         samples[i] = (s16)(samples[i] * s_master);
@@ -109,6 +121,7 @@ struct Shot {
     double pos = 0, step = 0;
     float volume[2] = {};
     bool held = false;          // standing still (the game paused it)
+    int category = hal::spu2::kEffects;
 };
 static Shot s_shots[24];
 
@@ -116,11 +129,12 @@ static void mix(s16* dst, int frames) {
     for (Shot& sh : s_shots) {
         if (!sh.pcm || sh.held)
             continue;
+        const float cat = s_category[sh.category];
         for (int i = 0; i < frames; i++) {
             u32 index = (u32)sh.pos;
             if (index >= sh.frames) { sh.pcm = nullptr; break; }
             for (int ch = 0; ch < 2; ch++) {
-                int mixed = dst[i * 2 + ch] + (int)(sh.pcm[index] * sh.volume[ch]);
+                int mixed = dst[i * 2 + ch] + (int)(sh.pcm[index] * sh.volume[ch] * cat);
                 dst[i * 2 + ch] = (s16)(mixed > 32767 ? 32767 : mixed < -32768 ? -32768 : mixed);
             }
             sh.pos += sh.step;
@@ -129,6 +143,7 @@ static void mix(s16* dst, int frames) {
     for (Stream& st : s_streams) {
         if (!st.open || !st.playing || st.paused || st.ended)
             continue;
+        const float cat = s_category[st.category];
         for (int i = 0; i < frames; i++) {
             if (st.pcmPos >= st.pcm.size() && !decode_next(st)) {
                 st.ended = true;
@@ -139,7 +154,7 @@ static void mix(s16* dst, int frames) {
             if (st.gain <= 0.0f && st.gainStep < 0.0f) { st.ended = true; break; }
             for (int ch = 0; ch < 2; ch++) {
                 int mixed = dst[i * 2 + ch]
-                          + (int)(st.pcm[st.pcmPos + ch] * st.volume[ch] * st.gain);
+                          + (int)(st.pcm[st.pcmPos + ch] * st.volume[ch] * st.gain * cat);
                 dst[i * 2 + ch] = (s16)(mixed > 32767 ? 32767 : mixed < -32768 ? -32768 : mixed);
             }
             // Step through the stream at its own rate (the output is 48 kHz).
@@ -244,6 +259,13 @@ bool stream_open(int slot, const char* path, u64 offset) {
         return false;
     }
     fresh.open = true;
+    // Music is BGM.TRS; story lines (SOUND.TRS) and voice effects
+    // (EFFECT.TRS) are voices.
+    {
+        std::string name = path;
+        for (char& ch : name) ch = (char)toupper((unsigned char)ch);
+        fresh.category = name.find("BGM.TRS") != std::string::npos ? kMusic : kVoice;
+    }
     SDL_LockAudioDevice(s_audio_dev);
     s_streams[slot] = std::move(fresh);
     SDL_UnlockAudioDevice(s_audio_dev);
@@ -304,7 +326,7 @@ bool stream_active(int slot) {
     return active;
 }
 
-void sample_play(const s16* pcm, u32 frames, u32 rate, u32 pitch, int left, int right) {
+void sample_play(const s16* pcm, u32 frames, u32 rate, u32 pitch, int left, int right, Category category) {
     if (!pcm || frames == 0)
         return;
     SDL_LockAudioDevice(s_audio_dev);
@@ -318,10 +340,21 @@ void sample_play(const s16* pcm, u32 frames, u32 rate, u32 pitch, int left, int 
         sh.step = (double)rate * pitch / 4096.0 / 48000.0;
         sh.volume[0] = (float)left / 16383.0f;
         sh.volume[1] = (float)right / 16383.0f;
+        sh.category = category;
         break;
     }
     SDL_UnlockAudioDevice(s_audio_dev);
 }
+
+void set_master(float volume) {
+    s_master = (volume < 0.0f ? 0.0f : volume > 1.0f ? 1.0f : volume) * 0.5f;   // 70% = the old default
+}
+void set_category_volume(Category category, float volume) {
+    if (category >= 0 && category < kCategories)
+        s_category[category] = volume < 0.0f ? 0.0f : volume > 1.0f ? 1.0f : volume;
+}
+void set_paused(bool paused) { s_paused = paused; }
+void set_muted(bool muted) { s_muted = muted; }
 
 void samples_hold(bool held) {
     // (What is playing now: a sound started afterwards plays — the menus'.)

@@ -207,7 +207,7 @@ void Native_EnhDraw() {
 
 // The line on the Settings screen that says the page is there.
 void Native_EnhHint() {
-    const char* s = "R1: Enhancements";
+    const char* s = "L1: Config. do PC   R1: Enhancements";
     text(s, 300 - text_width(s, 0.9f), -210, 0x7F141414u, 0.9f);
 }
 

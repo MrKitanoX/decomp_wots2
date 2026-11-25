@@ -111,6 +111,14 @@ struct Video {
     bool  fullscreen = false;
     int   windowWidth = 0, windowHeight = 0;    // 0 = leave the window as it is
     bool  hudEdges = false; // a wider picture: the in-world HUD keeps to its edges, not to the 4:3 middle
+    // PC settings menu: exclusive fullscreen (a real display mode) instead of
+    // the borderless desktop one; which monitor (-1: where the window is); the
+    // exclusive mode's size and refresh (0: the desktop's); and the picture's
+    // brightness and gamma (1 = as drawn).
+    bool  exclusive = false;
+    int   display = -1;
+    int   modeWidth = 0, modeHeight = 0, modeRefresh = 0;
+    float brightness = 1.0f, gamma = 1.0f;
 };
 void  set_video(const Video& video);
 // Only the rate and vsync (F6, the panel): the window is left where it is.

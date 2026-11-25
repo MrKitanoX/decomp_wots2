@@ -1,0 +1,47 @@
+Way of the Samurai 2 — versão nativa para PC (Windows 64 bits), com tradução PT-BR
+==================================================================================
+
+Você precisa da SUA PRÓPRIA cópia do jogo: o disco norte-americano (NTSC-U,
+SLUS-208.93), como imagem .iso (ou dentro de um .zip / .7z / .rar).
+Nenhum arquivo do jogo vem neste pacote.
+
+Instalação
+1. Descompacte esta pasta num lugar onde você possa gravar (não em
+   "Arquivos de Programas"). Precisa de uns 2 GB livres.
+2. Abra WotS2-Instalador.exe.
+3. Clique em "Procurar..." e escolha a sua ISO (ou arraste a ISO para a janela).
+4. Deixe "Tradução PT-BR" ligada (ou desligue para jogar em inglês) e clique
+   em "Instalar". Os arquivos do disco são extraídos para a pasta "extracted"
+   e a tradução é gerada a partir deles (só uma vez, leva um ou dois minutos).
+5. Clique em "Jogar". Depois disso, é só abrir wots2.exe.
+
+Vídeos (logos, abertura, finais): precisam do ffmpeg. Ponha ffmpeg.exe nesta
+pasta (https://www.gyan.dev/ffmpeg/builds/) ou tenha-o no PATH. Sem ele, os
+vídeos são pulados e o jogo segue normalmente.
+
+No jogo
+- F1 ou Esc: menu de configurações (vídeo, gráficos, áudio, controles, idioma,
+  salvar em qualquer lugar). Navega com mouse, teclado ou controle.
+- Mouse e teclado (padrão): WASD anda (Ctrl = devagar), mouse gira a câmera,
+  clique esquerdo ataca, direito defende, Espaço pula/confirma, E conversa,
+  F Triângulo, Q saca a espada, Shift corre, Enter = Start, Tab = Select,
+  botão do meio ou R = câmera atrás. O cursor some enquanto você joga; clique
+  na janela para capturá-lo de novo. Controles > Esquema > Clássico volta ao
+  layout antigo.
+- Controle Xbox / DualShock funciona direto.
+- F11 tela cheia, F5 painel gráfico, F3 iluminação moderna liga/desliga.
+
+Arquivos
+- extracted\      os arquivos do SEU disco (criados pelo instalador)
+- mods\ptbr\      a tradução: ptbr.wpatch é só a diferença (o texto em
+                  português); files\ é gerado a partir do seu disco
+- mods\*\         widescreen, resolução, FPS liberado, iluminação moderna
+- wots2_card\     seus saves;  settings.ini  suas configurações
+- wots2.log / instalador.log   anexe-os ao relatar problemas
+
+Créditos
+- decomp_wots2 (decompilação e versão nativa): https://github.com/acklavidian/decomp_wots2
+- Tradução PT-BR, menu de configurações, mouse e teclado e o instalador:
+  esta versão.
+Projeto de fãs, sem fins comerciais, sem ligação com Acquire, Spike ou Capcom.
+Way of the Samurai é marca de seus donos. É preciso ter o jogo original.

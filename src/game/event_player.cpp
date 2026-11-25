@@ -3002,6 +3002,11 @@ void EventPlayer_StartScript(EventPlayer* mem, const char* script, int second) {
     self->state = 2;
 }
 
+// Native (PC settings menu): a scene's script is running, or a load.
+int Native_EventRunning() {
+    return (sSelf != nullptr && sSelf->state == 2) || gLoadingActive != 0 ? 1 : 0;
+}
+
 // ── 0x1E3160 / 0x1E2E20: a scene can be skipped if its script has set
 // `OnCancelEvent`; skipping drops every thread and runs that instead ───────
 int EventPlayer_CanSkip(EventPlayer*) {

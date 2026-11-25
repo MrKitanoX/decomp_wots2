@@ -34,6 +34,7 @@ extern "C" void Native_EnhOpen();
 extern "C" int  Native_EnhUpdate();
 extern "C" void Native_EnhDraw();
 extern "C" void Native_EnhHint();
+extern "C" void Native_SettingsOpen();     // native/settings_menu.cpp (L1)
 static const GuestPtrVar<Config>   gConfig{0x2EE68Cu};
 
 enum { kAssetSettingsSprites = 0x56, kAssetSettingsParams = 0x57 };
@@ -292,6 +293,10 @@ void SettingsScreen_Start(SettingsScreen* self) {
 static int SettingsScreen_UpdateMenu(SettingsScreen* self) {
     void* pad = PadMgr_Get();
     // (the original fetches the repeat and pressed words here and ignores them)
+    if (Pad_GetPressed(pad, 0) & 0x04) {        // (native: L1, the PC settings menu)
+        Native_SettingsOpen();
+        return 1;
+    }
     if (Pad_GetPressed(pad, 0) & 0x08) {        // (native: R1, the Enhancements page)
         Native_EnhOpen();
         self->sub = kSubEnhancements;

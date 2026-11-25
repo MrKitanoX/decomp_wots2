@@ -34,9 +34,19 @@ bool stream_active(int slot);                  // opened and not yet finished
 
 // One-shot samples (sound effects).  `pcm` must stay valid; it is mono s16 at
 // `rate` Hz.  pitch 0x1000 plays at that rate; volumes run 0–0x3FFF.
-void sample_play(const s16* pcm, u32 frames, u32 rate, u32 pitch, int left, int right);
+// What a sound is, for the PC settings' volumes.
+enum Category { kMusic = 0, kVoice = 1, kEffects = 2, kMovie = 3, kCategories = 4 };
+void sample_play(const s16* pcm, u32 frames, u32 rate, u32 pitch, int left, int right,
+                 Category category = kEffects);
 void sample_stop(const s16* pcm);     // silences whatever is playing out of that buffer
 void samples_hold(bool held);         // the samples playing now stand still (silent) until let go
+// PC settings: overall volume 0…1 (1 = the port's old default ×2), each
+// category 0…1, and pausing / muting the whole output without the game
+// noticing (nothing advances while paused).
+void set_master(float volume);
+void set_category_volume(Category category, float volume);
+void set_paused(bool paused);
+void set_muted(bool muted);
 // PS-ADPCM (VAG body) → mono s16.  Stops at the block flagged as the end.
 void decode_adpcm(const u8* data, u32 size, std::vector<s16>& out);
 

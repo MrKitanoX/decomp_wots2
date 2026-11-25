@@ -16,6 +16,7 @@
 // the answer is the pad's buttons at the end.
 
 #include "hal/gs.h"
+extern "C" int Native_SettingsIsOpen();    // native/settings_menu.cpp
 #include "hal/pad.h"
 #include "hal/spu2.h"
 #include "native/hle.h"
@@ -261,8 +262,8 @@ extern "C" int Movie_Play(const char* path) {
     ReadSound(file, sSound);
     printf("[movie] %s (%.1f s of sound)\n", file.c_str(), sSound.left.size() / (double)sSound.rate);
     if (!sSound.left.empty()) {
-        hal::spu2::sample_play(sSound.left.data(), (u32)sSound.left.size(), sSound.rate, 0x1000, 0x3FFF, 0);
-        hal::spu2::sample_play(sSound.right.data(), (u32)sSound.right.size(), sSound.rate, 0x1000, 0, 0x3FFF);
+        hal::spu2::sample_play(sSound.left.data(), (u32)sSound.left.size(), sSound.rate, 0x1000, 0x3FFF, 0, hal::spu2::kMovie);
+        hal::spu2::sample_play(sSound.right.data(), (u32)sSound.right.size(), sSound.rate, 0x1000, 0, 0x3FFF, hal::spu2::kMovie);
     }
 
     void* pads = PadMgr_Get();
@@ -286,7 +287,7 @@ extern "C" int Movie_Play(const char* path) {
         hal::gs::end_frame();
         hal::gs::destroy_texture(tex);
 
-        if (!ReadFrame(video, frame, &why))
+        if (!Native_SettingsIsOpen() && !ReadFrame(video, frame, &why))
             break;
     }
     CloseDecoder(video);

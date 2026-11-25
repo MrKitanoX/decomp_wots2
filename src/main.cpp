@@ -12,6 +12,7 @@
 #include "native/launcher.h"
 #include "native/model.h"
 #include "native/mods.h"
+#include "native/settings_menu.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -55,6 +56,7 @@ int main(int argc, char* argv[]) {
     mods::load_all();
     hal::spu2::init();
     hal::pad::init();
+    settings_menu::init(argc, argv);     // settings.ini: window, sound, controls
     atexit(shutdown);
 
     // Debug aid: WOTS2_MODEL_VIEW=<character name or index> shows character
